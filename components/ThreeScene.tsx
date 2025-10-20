@@ -12,6 +12,8 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ cars, track }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const carMeshesRef = useRef<(THREE.Group | null)[]>([]);
   const carsRef = useRef(cars);
+  const animationFrameIdRef = useRef<number | null>(null);
+  const hasInitializedRef = useRef(false);
 
   useEffect(() => {
     carsRef.current = cars;
@@ -20,6 +22,7 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ cars, track }) => {
   useEffect(() => {
     if (!mountRef.current || !track) return;
     const mountPoint = mountRef.current;
+    hasInitializedRef.current = false;
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x87ceeb);
@@ -30,8 +33,8 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ cars, track }) => {
     mountPoint.appendChild(renderer.domElement);
 
     const cameras = [
-      new THREE.PerspectiveCamera(75, (mountPoint.clientWidth / 2) / mountPoint.clientHeight, 0.1, 1000),
-      new THREE.PerspectiveCamera(75, (mountPoint.clientWidth / 2) / mountPoint.clientHeight, 0.1, 1000)
+      new THREE.PerspectiveCamera(75, 1, 0.1, 1000),
+      new THREE.PerspectiveCamera(75, 1, 0.1, 1000)
     ];
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -50,36 +53,24 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ cars, track }) => {
     ground.receiveShadow = true;
     scene.add(ground);
     
-    // --- CORRECTED PROCEDURAL TRACK GENERATION ---
     const points = track.path.map(p => new THREE.Vector3(p[0], 0, p[1]));
     const curve = new THREE.CatmullRomCurve3(points, true);
 
-    const trackGeometry = new THREE.TubeGeometry(
-        curve,
-        200, // tubularSegments for a smooth curve
-        TRACK_LANE_WIDTH / 2, // radius of the tube (half the track width)
-        8, // radialSegments
-        true // closed loop
-    );
+    const trackGeometry = new THREE.TubeGeometry(curve, 200, TRACK_LANE_WIDTH / 2, 8, true);
     const trackMaterial = new THREE.MeshStandardMaterial({ color: 0x444444 });
     const trackMesh = new THREE.Mesh(trackGeometry, trackMaterial);
-    
-    // Flatten the round tube into a flat track by scaling its Y axis
     trackMesh.scale.y = 0.01;
-    
-    trackMesh.position.y = 0.05; // Position it slightly above the ground plane
+    trackMesh.position.y = 0.05;
     trackMesh.castShadow = true;
     trackMesh.receiveShadow = true;
     scene.add(trackMesh);
 
-    // --- NEW VISIBLE FINISH LINE ---
     const { p1, p2 } = track.finishLine;
     const midX = (p1.x + p2.x) / 2;
     const midZ = (p1.y + p2.y) / 2;
     const length = Math.hypot(p2.x - p1.x, p2.y - p1.y);
     const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
 
-    // Create a checkered texture
     const canvas = document.createElement('canvas');
     canvas.width = 64;
     canvas.height = 64;
@@ -92,19 +83,16 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ cars, track }) => {
     const texture = new THREE.CanvasTexture(canvas);
     texture.wrapS = THREE.RepeatWrapping;
     texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(Math.floor(length / 2), 1); // Adjust checker size to be roughly 2x2 units
+    texture.repeat.set(Math.floor(length / 2), 1);
 
-    const finishLineGeo = new THREE.BoxGeometry(length, 0.05, 2); // length, height, width
+    const finishLineGeo = new THREE.BoxGeometry(length, 0.05, 2);
     const finishLineMat = new THREE.MeshStandardMaterial({ map: texture, side: THREE.DoubleSide });
     const finishLine = new THREE.Mesh(finishLineGeo, finishLineMat);
-
-    // The top of the track is at y=0.125. Set finish line slightly above that.
     finishLine.position.set(midX, 0.151, midZ);
-    finishLine.rotation.y = -angle; // Align with the line segment
+    finishLine.rotation.y = -angle;
     finishLine.receiveShadow = true;
     scene.add(finishLine);
 
-    // Cars
     cars.forEach(carData => {
       const carGroup = new THREE.Group();
       const bodyMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(carData.color) });
@@ -121,17 +109,13 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ cars, track }) => {
       carMeshesRef.current[carData.id - 1] = carGroup;
     });
 
-    let animationFrameId: number;
-
     const animate = () => {
-      animationFrameId = requestAnimationFrame(animate);
+      animationFrameIdRef.current = requestAnimationFrame(animate);
       const currentCars = carsRef.current;
 
       currentCars.forEach(carData => {
         const carMesh = carMeshesRef.current[carData.id - 1];
         if (carMesh) {
-          // The car body is 1.5 units high, so its bottom should be at track top (0.125)
-          // The center should be at 0.125 + (1.5 / 2) = 0.875
           carMesh.position.set(carData.position.x, 0.875, carData.position.y);
           carMesh.rotation.y = -carData.angle;
         }
@@ -140,6 +124,8 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ cars, track }) => {
       const width = mountPoint.clientWidth;
       const height = mountPoint.clientHeight;
       
+      if (width === 0 || height === 0) return;
+
       for (let i = 0; i < 2; i++) {
         const carMesh = carMeshesRef.current[i];
         if (carMesh) {
@@ -157,31 +143,41 @@ const ThreeScene: React.FC<ThreeSceneProps> = ({ cars, track }) => {
       }
     };
     
-    const resizeObserver = new ResizeObserver(() => {
+    const handleResize = () => {
+        if (!mountPoint) return;
         const w = mountPoint.clientWidth;
         const h = mountPoint.clientHeight;
+        
+        if (w === 0 || h === 0) return;
+
         renderer.setSize(w, h);
         cameras.forEach(cam => {
-            cam.aspect = (w/2) / h;
+            cam.aspect = (w / 2) / h;
             cam.updateProjectionMatrix();
         });
-    });
+
+        if (!hasInitializedRef.current) {
+            hasInitializedRef.current = true;
+            animate();
+        }
+    };
+
+    const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(mountPoint);
-    
-    renderer.setSize(mountPoint.clientWidth, mountPoint.clientHeight);
-    animate();
 
     return () => {
-        cancelAnimationFrame(animationFrameId);
+        if (animationFrameIdRef.current) {
+            cancelAnimationFrame(animationFrameIdRef.current);
+        }
         resizeObserver.disconnect();
         if (mountPoint.contains(renderer.domElement)) {
             mountPoint.removeChild(renderer.domElement);
         }
         renderer.dispose();
     };
-  }, [track]); // Rerender scene when track changes
+  }, [track]);
 
-  return <div ref={mountRef} className="w-full h-full" />;
+  return <div ref={mountRef} className="w-full h-full absolute inset-0 z-0" />;
 };
 
 export default ThreeScene;
