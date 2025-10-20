@@ -1,0 +1,5 @@
+{
+  "name": "Retro Racer",
+  "description": "A two-player top-down retro racing game. Player 1 uses WASD keys, and Player 2 uses the arrow keys to control their cars. Race to the finish line to see who is the fastest!",
+  "requestFramePermissions": []
+}
